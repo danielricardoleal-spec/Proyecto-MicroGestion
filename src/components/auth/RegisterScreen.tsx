@@ -21,10 +21,12 @@ export default function RegisterScreen({ onGoLogin }: Props) {
   const [error, setError] = useState('');
   const [step, setStep] = useState<'form' | 'face' | 'done'>('form');
   const [showFace, setShowFace] = useState(false);
+  const [registeredUserId, setRegisteredUserId] = useState<string | null>(null);
 
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setError('');
+    
     if (!form.name || !form.email || !form.password || !role) {
       setError('Completa todos los campos'); return;
     }
@@ -34,8 +36,18 @@ export default function RegisterScreen({ onGoLogin }: Props) {
     if (form.password.length < 6) {
       setError('La contraseña debe tener al menos 6 caracteres'); return;
     }
+
     const result = register({ name: form.name, email: form.email, password: form.password, role: role as Role } as RegisterData);
-    if (!result.success) { setError(result.error || 'Error al registrar'); return; }
+    
+    if (!result.success) { 
+      setError(result.error || 'Error al registrar'); 
+      return; 
+    }
+    
+    if (result.user) {
+      setRegisteredUserId(result.user.id);
+    }
+    
     setStep('face');
   }
 
@@ -63,13 +75,13 @@ export default function RegisterScreen({ onGoLogin }: Props) {
       {showFace && (
         <FaceCapture
           mode="register"
+          userId={registeredUserId}
           onSuccess={() => { setShowFace(false); setStep('done'); }}
           onCancel={() => { setShowFace(false); setStep('done'); }}
         />
       )}
 
       <div className="w-full max-w-lg animate-fade-up">
-        {/* Brand */}
         <div className="mb-8 text-center">
           <div className="inline-flex items-center gap-2 mb-4">
             <div className="w-9 h-9 rounded-lg bg-[#3b7eff] flex items-center justify-center">
@@ -168,7 +180,8 @@ export default function RegisterScreen({ onGoLogin }: Props) {
                 </svg>
               </div>
               <h3 className="font-heading text-lg font-semibold text-white mb-1">¡Cuenta creada!</h3>
-              <p className="text-slate-400 text-sm mb-6">¿Deseas registrar tu rostro para acceso rápido?</p>
+              <p className="text-slate-400 text-sm mb-6">Ahora registra tu rostro para poder utilizar el reconocimiento facial.</p>
+              
               <div className="flex flex-col gap-3">
                 <button
                   onClick={() => setShowFace(true)}
@@ -178,7 +191,7 @@ export default function RegisterScreen({ onGoLogin }: Props) {
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z" />
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 13a3 3 0 11-6 0 3 3 0 016 0z" />
                   </svg>
-                  Activar cámara y registrar rostro
+                  Registrar mi rostro
                 </button>
                 <button
                   onClick={() => setStep('done')}

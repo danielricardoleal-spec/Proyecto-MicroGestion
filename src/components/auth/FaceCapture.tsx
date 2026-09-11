@@ -3,12 +3,13 @@ import { useAuth } from '../../contexts/AuthContext';
 
 interface FaceCaptureProps {
   mode: 'register' | 'login';
+  userId?: string | null;
   onSuccess: (userName?: string) => void;
   onCancel: () => void;
 }
 
-export default function FaceCapture({ mode, onSuccess, onCancel }: FaceCaptureProps) {
-  const { loginWithFace, registerFace, user } = useAuth();
+export default function FaceCapture({ mode, userId, onSuccess, onCancel }: FaceCaptureProps) {
+  const { loginWithFace, registerFace } = useAuth();
   const videoRef = useRef<HTMLVideoElement>(null);
   const [step, setStep] = useState<'idle' | 'active' | 'scanning' | 'success' | 'error'>('idle');
   const [error, setError] = useState('');
@@ -51,8 +52,8 @@ export default function FaceCapture({ mode, onSuccess, onCancel }: FaceCapturePr
     // Stub: replace with real face recognition API call
     await new Promise(r => setTimeout(r, 1200));
 
-    if (mode === 'register' && user) {
-      registerFace(user.id);
+    if (mode === 'register' && userId) {
+      registerFace(userId);
       setStep('success');
       stopStream();
       setTimeout(() => onSuccess(), 1500);
