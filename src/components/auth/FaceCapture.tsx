@@ -1,17 +1,32 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
+import * as faceapi from 'face-api.js';
 import { useAuth } from '../../contexts/AuthContext';
 
 interface FaceCaptureProps {
   mode: 'register' | 'login';
-  userId?: string | null;
+  userId?: string;
   onSuccess: (userName?: string) => void;
   onCancel: () => void;
+}
+
+const MODEL_URL = 'https://justadudewhohacks.github.io/face-api.js/models';
+
+let modelsLoadedPromise: Promise<void> | null = null;
+function loadModels() {
+  if (!modelsLoadedPromise) {
+    modelsLoadedPromise = Promise.all([
+      faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL),
+      faceapi.nets.faceLandmark68Net.loadFromUri(MODEL_URL),
+      faceapi.nets.faceRecognitionNet.loadFromUri(MODEL_URL),
+    ]).then(() => undefined);
+  }
+  return modelsLoadedPromise;
 }
 
 export default function FaceCapture({ mode, userId, onSuccess, onCancel }: FaceCaptureProps) {
   const { loginWithFace, registerFace } = useAuth();
   const videoRef = useRef<HTMLVideoElement>(null);
-  const [step, setStep] = useState<'idle' | 'active' | 'scanning' | 'success' | 'error'>('idle');
+  const [step, setStep] = useState<'idle' | 'loading-models' | 'active' | 'scanning' | 'success' | 'error'>('idle');
   const [error, setError] = useState('');
   const [countdown, setCountdown] = useState(3);
   const streamRef = useRef<MediaStream | null>(null);
@@ -28,48 +43,251 @@ export default function FaceCapture({ mode, userId, onSuccess, onCancel }: FaceC
   }, [stopStream]);
 
   async function startCamera() {
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user' } });
-      streamRef.current = stream;
-      if (videoRef.current) videoRef.current.srcObject = stream;
-      setStep('active');
-      setError('');
-    } catch {
-      setError('No se pudo acceder a la cámara. Verifica los permisos del navegador.');
+  try {
+    setStep('loading-models');
+    setError('');
+
+    console.log('Cargando modelos...');
+
+    await loadModels();
+
+    console.log('Modelos cargados correctamente');
+
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video: {
+        facingMode: 'user',
+        width: { ideal: 640 },
+        height: { ideal: 480 }
+      },
+      audio: false
+    });
+
+    streamRef.current = stream;
+
+    if (!videoRef.current) {
+      throw new Error('VIDEO_NO_ENCONTRADO');
     }
+
+    videoRef.current.srcObject = stream;
+
+    await new Promise<void>((resolve) => {
+      const video = videoRef.current!;
+
+      if (video.readyState >= 2 && video.videoWidth > 0) {
+        resolve();
+        return;
+      }
+
+      video.onloadedmetadata = () => {
+        resolve();
+      };
+    });
+
+    await videoRef.current.play();
+
+    console.log('Video iniciado:', {
+      readyState: videoRef.current.readyState,
+      videoWidth: videoRef.current.videoWidth,
+      videoHeight: videoRef.current.videoHeight
+    });
+
+    setStep('active');
+
+  } catch (err) {
+    console.error('Error iniciando cámara:', err);
+
+    stopStream();
+    setStep('idle');
+
+    setError(
+      'No se pudo iniciar la cámara o cargar el reconocimiento facial.'
+    );
   }
+}
 
   async function captureAndProcess() {
-    setStep('scanning');
-    setCountdown(3);
+  setStep('scanning');
+  setError('');
+  setCountdown(3);
 
-    // Simulate countdown
+  try {
     for (let i = 3; i >= 1; i--) {
       setCountdown(i);
-      await new Promise(r => setTimeout(r, 800));
+      await new Promise(resolve => setTimeout(resolve, 700));
     }
 
-    // Stub: replace with real face recognition API call
-    await new Promise(r => setTimeout(r, 1200));
+    const video = videoRef.current;
 
-    if (mode === 'register' && userId) {
-      registerFace(userId);
-      setStep('success');
+    if (!video) {
+      throw new Error('VIDEO_NO_ENCONTRADO');
+    }
+
+    console.log('========== RECONOCIMIENTO ==========');
+
+    console.log('Modelos:', {
+      tinyFaceDetector: faceapi.nets.tinyFaceDetector.isLoaded,
+      faceLandmark68Net: faceapi.nets.faceLandmark68Net.isLoaded,
+      faceRecognitionNet: faceapi.nets.faceRecognitionNet.isLoaded
+    });
+
+    console.log('Video:', {
+      readyState: video.readyState,
+      width: video.videoWidth,
+      height: video.videoHeight
+    });
+
+    if (
+      !faceapi.nets.tinyFaceDetector.isLoaded ||
+      !faceapi.nets.faceLandmark68Net.isLoaded ||
+      !faceapi.nets.faceRecognitionNet.isLoaded
+    ) {
+      throw new Error('MODELOS_NO_CARGADOS');
+    }
+
+    if (video.videoWidth === 0 || video.videoHeight === 0) {
+      throw new Error('VIDEO_NO_LISTO');
+    }
+
+    console.log('Detectando rostro...');
+
+    const detection = await Promise.race([
+      faceapi
+        .detectSingleFace(
+          video,
+          new faceapi.TinyFaceDetectorOptions({
+            inputSize: 416,
+            scoreThreshold: 0.4
+          })
+        )
+        .withFaceLandmarks()
+        .withFaceDescriptor(),
+
+      new Promise<never>((_, reject) =>
+        setTimeout(
+          () => reject(new Error('TIMEOUT_DETECCION')),
+          10000
+        )
+      )
+    ]);
+
+    console.log('Resultado detección:', detection);
+
+    if (!detection) {
+      setStep('error');
+      setError(
+        'No se detectó ningún rostro. Acércate a la cámara, mejora la iluminación y mira directamente al frente.'
+      );
       stopStream();
-      setTimeout(() => onSuccess(), 1500);
-    } else if (mode === 'login') {
-      const result = loginWithFace();
+      return;
+    }
+
+    console.log('¡ROSTRO DETECTADO!');
+
+    const descriptor = Array.from(detection.descriptor);
+
+    console.log('Descriptor generado:', descriptor.length);
+
+    if (descriptor.length !== 128) {
+      throw new Error('DESCRIPTOR_INVALIDO');
+    }
+
+    if (mode === 'register') {
+
+  const faceUserId =
+    userId || localStorage.getItem('microgestion_pending_face_user');
+
+  console.log('ID recibido para registrar rostro:', faceUserId);
+
+  if (!faceUserId) {
+    throw new Error('USUARIO_NO_ENCONTRADO');
+  }
+
+  console.log('Registrando rostro para usuario:', faceUserId);
+
+  registerFace(faceUserId, descriptor);
+
+  localStorage.removeItem('microgestion_pending_face_user');
+
+  console.log('Rostro registrado correctamente');
+
+  setStep('success');
+  stopStream();
+
+  setTimeout(() => {
+    onSuccess();
+  }, 1500);
+
+  return;
+}
+
+    if (mode === 'login') {
+
+      console.log('Comparando rostro con usuarios registrados...');
+
+      const result = loginWithFace(descriptor);
+
+      console.log('Resultado reconocimiento:', result);
+
       if (result.success) {
         setStep('success');
         stopStream();
-        setTimeout(() => onSuccess(result.user?.name), 1500);
+
+        setTimeout(() => {
+          onSuccess(result.user?.name);
+        }, 1500);
+
       } else {
         setStep('error');
-        setError(result.error || 'Rostro no reconocido');
+        setError(
+          result.error || 'Rostro no reconocido.'
+        );
         stopStream();
       }
     }
+
+  } catch (err) {
+
+    console.error('ERROR COMPLETO EN RECONOCIMIENTO:', err);
+
+    setStep('error');
+
+    if (err instanceof Error) {
+
+      if (err.message === 'TIMEOUT_DETECCION') {
+        setError(
+          'El reconocimiento tardó demasiado. Verifica que tu rostro esté bien iluminado y visible.'
+        );
+
+      } else if (err.message === 'MODELOS_NO_CARGADOS') {
+        setError(
+          'Los modelos de reconocimiento facial no se cargaron correctamente.'
+        );
+
+      } else if (err.message === 'VIDEO_NO_LISTO') {
+        setError(
+          'La cámara todavía no está lista. Intenta nuevamente.'
+        );
+
+      } else if (err.message === 'USUARIO_NO_ENCONTRADO') {
+        setError(
+          'No se encontró el usuario para guardar el rostro.'
+        );
+
+      } else {
+        setError(
+          'Ocurrió un error al analizar el rostro. Revisa la consola con F12.'
+        );
+      }
+
+    } else {
+      setError(
+        'Ocurrió un error desconocido durante el reconocimiento.'
+      );
+    }
+
+    stopStream();
   }
+}
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm">
@@ -102,17 +320,23 @@ export default function FaceCapture({ mode, userId, onSuccess, onCancel }: FaceC
               </div>
             )}
 
+            {step === 'loading-models' && (
+              <div className="flex flex-col items-center gap-3 text-slate-400">
+                <div className="w-8 h-8 border-2 border-[#3b7eff] border-t-transparent rounded-full animate-spin" />
+                <p className="text-sm">Cargando modelo de reconocimiento facial...</p>
+              </div>
+            )}
+
             <video
               ref={videoRef}
               autoPlay
               playsInline
               muted
-              className={`w-full h-full object-cover ${step === 'idle' || step === 'success' || step === 'error' ? 'hidden' : ''}`}
+              className={`w-full h-full object-cover ${step === 'idle' || step === 'loading-models' || step === 'success' || step === 'error' ? 'hidden' : ''}`}
             />
 
             {(step === 'active' || step === 'scanning') && (
               <>
-                {/* Face frame overlay */}
                 <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
                   <div className="w-40 h-44 relative">
                     <div className="absolute top-0 left-0 w-8 h-8 border-t-2 border-l-2 border-[#3b7eff] rounded-tl-lg" />
@@ -169,6 +393,14 @@ export default function FaceCapture({ mode, userId, onSuccess, onCancel }: FaceC
                 className="flex-1 py-2.5 rounded-lg bg-[#3b7eff] hover:bg-[#5a94ff] text-white font-medium text-sm transition-colors"
               >
                 Activar cámara
+              </button>
+            )}
+            {step === 'loading-models' && (
+              <button
+                disabled
+                className="flex-1 py-2.5 rounded-lg bg-[#1e2d4a] text-slate-400 font-medium text-sm cursor-not-allowed"
+              >
+                Cargando...
               </button>
             )}
             {step === 'active' && (

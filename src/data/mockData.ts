@@ -9,6 +9,7 @@ export interface User {
   avatar?: string;
   faceRegistered: boolean;
   createdAt: string;
+  faceDescriptor?: number[];
 }
 
 // Simulated user database — replace with real DB later

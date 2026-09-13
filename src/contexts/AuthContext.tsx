@@ -14,9 +14,21 @@ interface AuthContextType {
   login: (email: string, password: string) => { success: boolean; error?: string };
   register: (data: RegisterData) => { success: boolean; error?: string; user?: User };
   logout: () => void;
-  registerFace: (userId: string) => void;
-  loginWithFace: () => { success: boolean; error?: string; user?: User };
+  registerFace: (userId: string, descriptor: number[]) => void;
+  loginWithFace: (descriptor: number[]) => { success: boolean; error?: string; user?: User };
 }
+
+// Distancia euclidiana entre dos descriptores faciales (128 valores cada uno).
+function euclideanDistance(a: number[], b: number[]): number {
+  let sum = 0;
+  for (let i = 0; i < a.length; i++) {
+    sum += (a[i] - b[i]) ** 2;
+  }
+  return Math.sqrt(sum);
+}
+
+// Umbral de coincidencia: más bajo = más estricto.
+const FACE_MATCH_THRESHOLD = 0.5;
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
@@ -76,22 +88,34 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     localStorage.removeItem('microgestion_current_user');
   };
 
-  const registerFace = (userId: string) => {
-    setUsers(prev => prev.map(u => u.id === userId ? { ...u, faceRegistered: true } : u));
-    // Actualizar también el usuario actual si coincide
-    setUser(prev => prev && prev.id === userId ? { ...prev, faceRegistered: true } : prev);
+  const registerFace = (userId: string, descriptor: number[]) => {
+    setUsers(prev => prev.map(u => u.id === userId ? { ...u, faceRegistered: true, faceDescriptor: descriptor } : u));
+    setUser(prev => prev && prev.id === userId ? { ...prev, faceRegistered: true, faceDescriptor: descriptor } : prev);
   };
 
- const loginWithFace = () => {
-    const registeredUsers = users.filter(u => u.faceRegistered);
+  const loginWithFace = (descriptor: number[]) => {
+    const registeredUsers = users.filter(u => u.faceRegistered && u.faceDescriptor);
     if (registeredUsers.length === 0) {
       return { success: false, error: 'No hay rostros registrados en el sistema' };
     }
-    
-    const faceUser = registeredUsers[registeredUsers.length - 1];
-    
-    setUser(faceUser);
-    return { success: true, user: faceUser };
+
+    let bestMatch: User | null = null;
+    let bestDistance = Infinity;
+
+    for (const candidate of registeredUsers) {
+      const distance = euclideanDistance(candidate.faceDescriptor!, descriptor);
+      if (distance < bestDistance) {
+        bestDistance = distance;
+        bestMatch = candidate;
+      }
+    }
+
+    if (!bestMatch || bestDistance > FACE_MATCH_THRESHOLD) {
+      return { success: false, error: 'Rostro no reconocido. Intenta de nuevo.' };
+    }
+
+    setUser(bestMatch);
+    return { success: true, user: bestMatch };
   };
 
   return (
